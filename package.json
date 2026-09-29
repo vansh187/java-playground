@@ -1,0 +1,15 @@
+{
+  "name": "webnest-java-playground",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Java 17 playground API and practice editor for Webnest Studio",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node scripts/dev.js",
+    "test": "node --test --test-concurrency=1",
+    "test:cloud": "node scripts/smoke-cloud.js",
+    "test:webnest": "node scripts/smoke-webnest.js"
+  }
+}

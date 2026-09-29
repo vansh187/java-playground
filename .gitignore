@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Java playground
+node_modules/
+coverage/
+*.class
+*.jar
+.local/
