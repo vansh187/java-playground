@@ -46,7 +46,7 @@ public class Main {
 const spring = await run(springApp, 'demo.Main');
 assert.equal(spring.status, 'success', spring.run?.stdout + spring.compile.stderr);
 assert.match(spring.run.stdout, /spring works/);
-const springLoop = await run(springApp.replace('return args ->', 'return args -> { while (true) {} }; //'), 'demo.Main');
+const springLoop = await run(springApp.replace('System.out.println(greeter.hello())', '{ while (true) {} }'), 'demo.Main');
 assert.equal(springLoop.status, 'timeout');
 assert.equal((await run(program('System.out.print("healthy after limits");'))).status, 'success');
 console.log('Cloud smoke tests passed: compilation, exceptions, deadlines, output limits, network/metadata isolation, environment, Spring Boot, and recovery.');
