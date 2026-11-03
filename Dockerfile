@@ -1,9 +1,20 @@
 FROM eclipse-temurin:17-jdk-jammy AS jdk
+
+# Resolve the Spring Boot jars at build time: submissions run without network access.
+FROM maven:3.9.16-eclipse-temurin-17 AS spring
+WORKDIR /build
+COPY spring-boot/pom.xml ./
+RUN mvn -B -q dependency:copy-dependencies -DincludeScope=runtime -DoutputDirectory=/opt/spring-boot/lib
+
 FROM node:24-bookworm-slim
 
 COPY --from=jdk /opt/java/openjdk /opt/java/openjdk
+COPY --from=spring /usr/share/maven /opt/maven
+COPY --from=spring /opt/spring-boot/lib /opt/spring-boot/lib
 ENV JAVA_HOME=/opt/java/openjdk \
-    PATH="/opt/java/openjdk/bin:${PATH}" \
+    MAVEN_HOME=/opt/maven \
+    SPRING_BOOT_LIB=/opt/spring-boot/lib \
+    PATH="/opt/java/openjdk/bin:/opt/maven/bin:${PATH}" \
     NODE_ENV=production \
     EXECUTION_MODE=cloud-run \
     PORT=8080

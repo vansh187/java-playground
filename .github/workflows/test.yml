@@ -12,9 +12,15 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Resolve Spring Boot jars
+        run: mvn -B -q -f spring-boot/pom.xml dependency:copy-dependencies -DincludeScope=runtime -DoutputDirectory="$RUNNER_TEMP/spring-boot-lib"
       - run: npm test
+        env:
+          SPRING_BOOT_LIB: ${{ runner.temp }}/spring-boot-lib
       - run: docker build -t webnest-java-playground:test .
       - name: Verify image runtimes
         run: |
           docker run --rm --entrypoint java webnest-java-playground:test -version
           docker run --rm --entrypoint javac webnest-java-playground:test -version
+          docker run --rm --entrypoint mvn webnest-java-playground:test -version
+          docker run --rm --entrypoint sh webnest-java-playground:test -c 'ls "$SPRING_BOOT_LIB"/spring-boot-4.*.jar'

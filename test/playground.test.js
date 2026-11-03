@@ -78,6 +78,48 @@ test('invalid class paths, argument options, and large inputs', () => {
   assert.throws(() => validateSubmission({ code: 'x', args: ['\0'] }, config));
   assert.throws(() => configuration({ JAVA_HOME: 'x', EXECUTION_MODE: 'local', K_SERVICE: 'production' }));
 });
+const springMissing = await import('node:fs/promises').then(fs => fs.access(config.springBootLib)).then(() => false, () =>
+  'Spring Boot jars not installed; set SPRING_BOOT_LIB (see README)');
+const springApp = `package demo;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+import org.springframework.stereotype.Service;
+import org.springframework.web.bind.annotation.*;
+@SpringBootApplication
+public class Main {
+  public static void main(String[] args) { SpringApplication.run(Main.class, args); }
+  @Bean CommandLineRunner greet(Greeter greeter) { return args -> System.out.println(greeter.hello(args[0])); }
+}
+@Service class Greeter { String hello(String name) { return "Hello, " + name + " from Spring"; } }
+@RestController class Api { @GetMapping("/hi") String hi(@RequestParam String name) { return name; } }`;
+test('Spring Boot applications compile, inject beans, and exit without a web server', { skip: springMissing }, async () => {
+  const result = await run(springApp, { className: 'demo.Main', args: ['learner'] });
+  assert.equal(result.status, 'success', result.compile.stderr + (result.run?.stderr ?? ''));
+  assert.equal(result.springBoot, true);
+  assert.match(result.run.stdout, /Hello, learner from Spring/);
+  assert.doesNotMatch(result.run.stdout, /Tomcat started/);
+});
+test('Spring Boot errors are reported as compile and runtime errors', { skip: springMissing }, async () => {
+  const compile = await run(springApp.replace('greeter.hello', 'greeter.missing'), { className: 'demo.Main' });
+  assert.equal(compile.status, 'compile_error');
+  const runtime = await run(springApp.replace('@Service class Greeter', 'class Greeter'), { className: 'demo.Main', args: ['x'] });
+  assert.equal(runtime.status, 'runtime_error');
+  assert.match(runtime.run.stdout + runtime.run.stderr, /Greeter/);
+});
+test('plain Java does not get the Spring classpath', async () => {
+  // Split the name so the source does not mention the Spring package and stays a plain Java submission.
+  const result = await run(program('Class.forName("org." + "springframework.boot.SpringApplication");'));
+  assert.equal(result.status, 'runtime_error');
+  assert.match(result.run.stderr, /ClassNotFoundException/);
+  assert.equal(result.springBoot, false);
+});
+test('Spring Boot applications in the default package are rejected', () => {
+  assert.throws(() => validateSubmission({ code: springApp.replace('package demo;', '') }, config), /must declare a package/);
+  assert.equal(validateSubmission({ code: springApp, className: 'demo.Main' }, config).springBoot, true);
+});
+
 test('cancellation stops an active program', async () => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1500);
@@ -150,6 +192,18 @@ test('cloud runner compiles and runs inside one sandbox then deletes it', async 
   assert.ok(calls[2].args.includes('/tmp/src/Main.java'));
   assert.deepEqual(calls[4].args, ['delete', '--force', calls[1].args[1]]);
   assert.ok(!calls.flatMap(c => c.args).includes('--allow-egress'));
+});
+test('cloud runner adds the Spring Boot classpath only for Spring submissions', async () => {
+  const calls = [];
+  const fake = async (command, args) => { calls.push(args); return { exitCode: 0, stdout: '', stderr: '', timedOut: false }; };
+  // The cloud runner checks the jar directory on the host, which shares the sandbox's filesystem.
+  const cloudRunner = new JavaRunner({ ...config, mode: 'cloud-run', springBootLib: process.cwd() }, fake);
+  await cloudRunner.run(validateSubmission({ code: 'package demo; import org.springframework.boot.SpringApplication; public class Main {}', className: 'demo.Main' }, config));
+  const [compile, execute] = [calls[2], calls[3]];
+  const expected = ['/tmp/classes', `${process.cwd()}${process.platform === 'win32' ? '\\' : '/'}*`].join(process.platform === 'win32' ? ';' : ':');
+  assert.equal(compile[compile.indexOf('-classpath') + 1], expected);
+  assert.equal(execute[execute.indexOf('-cp') + 1], expected);
+  assert.ok(execute.includes('-Dspring.main.web-application-type=none'));
 });
 test('cloud cleanup failure disables further execution', async () => {
   const fake = async (command, args) => ({ exitCode: args[0] === 'delete' ? 1 : 0, stdout: '', stderr: 'test failure' });

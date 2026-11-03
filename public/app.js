@@ -25,11 +25,37 @@ public class Main {
         System.out.println(numbers[5]);
     }
 }`,
+  spring: `package demo;
+
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+import org.springframework.stereotype.Service;
+
+@SpringBootApplication
+public class Main {
+    public static void main(String[] args) {
+        SpringApplication.run(Main.class, args);
+    }
+
+    @Bean
+    CommandLineRunner start(GreetingService greetings) {
+        return args -> System.out.println(greetings.greet("Webnest learner"));
+    }
+}
+
+@Service
+class GreetingService {
+    String greet(String name) {
+        return "Hello, " + name + "! Spring injected this service.";
+    }
+}`,
 };
 $('code').value = examples.hello;
 $('example').addEventListener('change', () => {
   $('code').value = examples[$('example').value];
-  $('className').value = 'Main';
+  $('className').value = $('example').value === 'spring' ? 'demo.Main' : 'Main';
   $('stdin').value = $('example').value === 'input' ? 'Java learner\n' : '';
 });
 $('code').addEventListener('keydown', event => {
@@ -59,7 +85,7 @@ async function run() {
     const response = await fetch('/api/run', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: $('code').value, className: $('className').value.trim(), stdin: $('stdin').value }),
-      signal: AbortSignal.timeout(50000),
+      signal: AbortSignal.timeout(60000), // Spring Boot runs may take up to ~55 s in the worst case.
     });
     const data = await response.json();
     $('requestId').textContent = `Request: ${data.requestId || 'unavailable'}`;

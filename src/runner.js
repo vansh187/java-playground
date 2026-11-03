@@ -18,7 +18,12 @@ export function validateSubmission(body, config) {
   if (!Array.isArray(args) || args.length > 16 || args.some(a => typeof a !== 'string' || a.includes('\0') || Buffer.byteLength(a) > 1024)) {
     throw new InputError('args must contain at most 16 strings, each at most 1024 bytes, without NUL characters');
   }
-  return { code, className, stdin, args };
+  const springBoot = /\borg\.springframework\./.test(code);
+  // Component scanning from the default package would scan every jar on the classpath.
+  if (springBoot && /@(SpringBootApplication|ComponentScan)\b/.test(code) && !/^\s*package\s+[\w.$]+\s*;/m.test(code)) {
+    throw new InputError('Spring Boot applications must declare a package, for example "package demo;", with className demo.Main');
+  }
+  return { code, className, stdin, args, springBoot };
 }
 
 function stageStatus(stage, failure) {
@@ -45,6 +50,7 @@ export class JavaRunner {
     }
     if (c.mode === 'cloud-run') {
       await access(c.sandbox); // Fail closed: never fall back to ordinary child execution.
+      await access(c.springBootLib); // The image must ship the Spring Boot jars.
       // Exercise actual sandbox creation before the service is marked ready.
       const result = await this.runProcess(c.sandbox, ['do', '--', '/bin/true'], { timeoutMs: 10000 });
       if (result.exitCode !== 0) throw new Error(`Cloud Run sandbox startup failed: ${result.stderr}`);
@@ -54,12 +60,19 @@ export class JavaRunner {
   async run(submission, signal) {
     if (!this.healthy) throw new Error('Runner unavailable after sandbox cleanup failure');
     const c = this.config;
+    const spring = submission.springBoot === true;
+    if (spring) {
+      try { await access(c.springBootLib); }
+      catch { throw new InputError('Spring Boot libraries are not installed on this server'); }
+    }
     const sandboxName = `java-${randomUUID()}`;
     const workspace = await mkdtemp(path.join(tmpdir(), 'webnest-java-'));
     const fileName = `${submission.className.split('.').at(-1)}.java`;
     // A sandbox has its own private /tmp, so in cloud mode the source and classes live only inside it.
     const classes = c.mode === 'cloud-run' ? '/tmp/classes' : path.join(workspace, 'classes');
     const source = c.mode === 'cloud-run' ? `/tmp/src/${fileName}` : path.join(workspace, fileName);
+    // A trailing * is a JVM classpath wildcard, expanded by java/javac (no shell is involved).
+    const classpath = spring ? [classes, path.join(c.springBootLib, '*')].join(path.delimiter) : classes;
     let sandboxAttempted = false;
     const cleanEnvironment = Object.fromEntries(Object.entries({
       SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR,
@@ -75,7 +88,7 @@ export class JavaRunner {
       if (c.mode === 'cloud-run') {
         sandboxAttempted = true;
         const setup = await this.runProcess(c.sandbox,
-          ['run', '--write', sandboxName, '--detach', '--', '/bin/sleep', '45'],
+          ['run', '--write', sandboxName, '--detach', '--', '/bin/sleep', '60'],
           { timeoutMs: 10000, outputLimitBytes: c.outputLimitBytes, signal });
         if (setup.exitCode !== 0 || setup.timedOut || setup.cancelled) throw new Error(`Sandbox creation failed: ${setup.stderr}`);
         // Stream the source in through stdin; the file name is passed as an argument, never interpolated.
@@ -89,20 +102,26 @@ export class JavaRunner {
       const compile = await runStage(c.javac, [
         '-J-Xmx192m', '-J-XX:MaxMetaspaceSize=96m', '-J-XX:ActiveProcessorCount=1',
         '--release', '17', '-encoding', 'UTF-8', '-proc:none', '-Xlint:all',
-        '-classpath', classes, '-d', classes, source,
-      ], c.compileTimeoutMs);
+        // Spring binds constructor and request parameters by name.
+        ...(spring ? ['-parameters'] : []),
+        '-classpath', classpath, '-d', classes, source,
+      ], spring ? c.springCompileTimeoutMs : c.compileTimeoutMs);
       // Return stable source filenames rather than host temporary paths.
       for (const key of ['stdout', 'stderr']) compile[key] = compile[key].split(source).join(fileName);
       const compileStatus = stageStatus(compile, 'compile_error');
-      if (compileStatus !== 'success') return { status: compileStatus, phase: 'compile', compile, run: null };
+      if (compileStatus !== 'success') return { status: compileStatus, phase: 'compile', springBoot: spring, compile, run: null };
       const run = await runStage(c.java, [
-        '-Xms16m', '-Xmx128m', '-Xss512k', '-XX:MaxMetaspaceSize=64m',
-        '-XX:MaxDirectMemorySize=32m', '-XX:ReservedCodeCacheSize=32m', '-XX:ActiveProcessorCount=1',
-        '-XX:+UseSerialGC', '-XX:-UsePerfData', '-XX:+DisableAttachMechanism',
+        '-Xms16m', spring ? '-Xmx256m' : '-Xmx128m', '-Xss512k',
+        spring ? '-XX:MaxMetaspaceSize=128m' : '-XX:MaxMetaspaceSize=64m',
+        '-XX:MaxDirectMemorySize=32m', spring ? '-XX:ReservedCodeCacheSize=48m' : '-XX:ReservedCodeCacheSize=32m',
+        '-XX:ActiveProcessorCount=1', '-XX:+UseSerialGC', '-XX:-UsePerfData', '-XX:+DisableAttachMechanism',
         '-XX:+ExitOnOutOfMemoryError', '-Dfile.encoding=UTF-8',
-        '-cp', classes, submission.className, ...submission.args,
-      ], c.runTimeoutMs, submission.stdin);
-      return { status: stageStatus(run, 'runtime_error'), phase: 'run', compile, run };
+        // Faster startup for short Spring runs. No embedded web server by default: it would never exit,
+        // so a run would always end in a timeout. Pass --spring.main.web-application-type=servlet to opt in.
+        ...(spring ? ['-XX:TieredStopAtLevel=1', '-Dspring.main.web-application-type=none'] : []),
+        '-cp', classpath, submission.className, ...submission.args,
+      ], spring ? c.springRunTimeoutMs : c.runTimeoutMs, submission.stdin);
+      return { status: stageStatus(run, 'runtime_error'), phase: 'run', springBoot: spring, compile, run };
     } finally {
       try {
         if (sandboxAttempted) {

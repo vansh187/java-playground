@@ -13,7 +13,11 @@ export function configuration(env = process.env) {
     java: path.join(javaHome, 'bin', process.platform === 'win32' ? 'java.exe' : 'java'),
     javac: path.join(javaHome, 'bin', process.platform === 'win32' ? 'javac.exe' : 'javac'),
     sandbox: '/usr/local/gcp/bin/sandbox',
+    // Jars resolved from spring-boot/pom.xml at image build time; used only when a submission imports Spring.
+    springBootLib: env.SPRING_BOOT_LIB || '/opt/spring-boot/lib',
     compileTimeoutMs: 10000, runTimeoutMs: 5000, outputLimitBytes: 65536,
+    // Spring Boot needs more time and memory to compile against its jars and start its context.
+    springCompileTimeoutMs: 20000, springRunTimeoutMs: 15000,
     bodyLimitBytes: 131072, codeLimitBytes: 65536, stdinLimitBytes: 16384,
   };
 }

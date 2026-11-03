@@ -16,7 +16,24 @@ $env:JAVA_HOME = 'C:\Program Files\Java\jdk-17'
 npm run dev
 ```
 
-Open **http://127.0.0.1:8080**. Enter Java source, optional standard input, and click **Run code** or press **Ctrl+Enter**. Examples include input handling and an exception. Enter a full class name such as `practice.Main` if the source declares a package. One source file can contain additional non-public classes. External libraries, Maven projects, and interactive terminal sessions are not supported.
+Open **http://127.0.0.1:8080**. Enter Java source, optional standard input, and click **Run code** or press **Ctrl+Enter**. Examples include input handling and an exception. Enter a full class name such as `practice.Main` if the source declares a package. One source file can contain additional non-public classes. Spring Boot is available (see below); other external libraries, multi-file Maven projects, and interactive terminal sessions are not supported.
+
+## Spring Boot
+
+Spring Boot **4.1.2** (Spring Framework 7) is preinstalled with the `spring-boot-starter`, `spring-boot-starter-webmvc`, and `spring-boot-starter-validation` libraries, listed in [spring-boot/pom.xml](spring-boot/pom.xml). Code that mentions `org.springframework.` is compiled and run with these jars on the classpath (`springBoot: true` in the response). Plain Java submissions are unaffected.
+
+- Declare a package and set the class name, for example `package demo;` with `demo.Main`. `@SpringBootApplication` in the default package is rejected, because it would scan every jar.
+- Limits for Spring submissions: 20 seconds compilation, 15 seconds execution, 256 MiB heap.
+- The embedded web server is disabled (`spring.main.web-application-type=none`) so applications exit after their `CommandLineRunner`s. Controllers still compile. Passing `--spring.main.web-application-type=servlet` starts Tomcat, but the run then lasts until the time limit.
+- Submissions have no network access, so only the listed libraries exist. To add one, add it to the pom and rebuild the image.
+
+The Docker image resolves these jars into `/opt/spring-boot/lib` at build time using Maven 3.9.16, which is also installed (`mvn -version`). For local development, install Maven and resolve the jars, then point `SPRING_BOOT_LIB` at them (Spring tests are skipped without it):
+
+```powershell
+$mvn = 'D:\Tools\apache-maven-3.9.16\bin\mvn.cmd'
+& $mvn -B -q -f spring-boot\pom.xml '-Dmaven.repo.local=D:\Tools\m2\repository' dependency:copy-dependencies -DincludeScope=runtime '-DoutputDirectory=D:\Tools\spring-boot\lib'
+$env:SPRING_BOOT_LIB = 'D:\Tools\spring-boot\lib'
+```
 
 Local mode binds only to loopback and is for **trusted development code**. It is not an isolation boundary: submitted code runs under your local user account. Do not expose it through a tunnel or reverse proxy. Public student submissions must use cloud sandbox mode. Local mode is refused when the Cloud Run `K_SERVICE` variable is present.
 
@@ -82,7 +99,7 @@ Tests run real Java 17 programs covering compiler failures, exceptions, packages
 
 Program errors return HTTP 200 with the execution status. HTTP 400 indicates invalid JSON/input, 403 a forbidden browser origin, 413 an oversized request, 415 an incorrect content type, 429 a busy instance, and 500/503 a service problem. Every response includes `X-Request-Id`; JSON also includes `requestId`.
 
-Limits: 64 KiB source, 16 KiB stdin, 128 KiB total request, 16 arguments of at most 1024 bytes each, 10 seconds compilation, 5 seconds execution, and 64 KiB combined stdout/stderr **per phase**. Standard input is sent once and closed. One active submission runs per instance; overlapping requests receive 429.
+Limits: 64 KiB source, 16 KiB stdin, 128 KiB total request, 16 arguments of at most 1024 bytes each, 10 seconds compilation, 5 seconds execution (Spring Boot: 20 and 15 seconds), and 64 KiB combined stdout/stderr **per phase**. Standard input is sent once and closed. One active submission runs per instance; overlapping requests receive 429.
 
 ## Webnest Studio integration
 
@@ -98,7 +115,7 @@ For future cloud integration, see [the backend example](examples/webnest-backend
 
 ## Docker and Cloud Run architecture
 
-The image includes Eclipse Temurin OpenJDK 17 and Node.js 24, including both `javac` and `java`. Compilation uses `--release 17`, UTF-8, and disabled annotation processing. Docker copies only the server and editor and runs the service as the unprivileged `node` user.
+The image includes Eclipse Temurin OpenJDK 17, Node.js 24, Maven 3.9.16, and the Spring Boot 4.1.2 jars, including both `javac` and `java`. Compilation uses `--release 17`, UTF-8, and disabled annotation processing. Docker copies only the server and editor and runs the service as the unprivileged `node` user.
 
 In cloud mode, each submission gets a new named **Cloud Run sandbox**, with compilation and execution inside it. A writable ephemeral overlay stores compiled classes. Outbound networking stays disabled, and the parent environment is not passed to submitted code. No host bind mounts or cloud credentials are provided. The parent captures stdout/stderr, enforces deadlines/output limits, and deletes the entire sandbox in `finally`, including after failures or cancellation. Cleanup failure makes the runner unhealthy and blocks further submissions. There is no unsandboxed cloud fallback.
 
