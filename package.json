@@ -10,6 +10,7 @@
     "dev": "node scripts/dev.js",
     "test": "node --test --test-concurrency=1",
     "test:cloud": "node scripts/smoke-cloud.js",
+    "test:cloud:project": "node scripts/smoke-cloud-project.js",
     "test:webnest": "node scripts/smoke-webnest.js"
   }
 }

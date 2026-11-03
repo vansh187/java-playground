@@ -101,6 +101,29 @@ Program errors return HTTP 200 with the execution status. HTTP 400 indicates inv
 
 Limits: 64 KiB source, 16 KiB stdin, 128 KiB total request, 16 arguments of at most 1024 bytes each, 10 seconds compilation, 5 seconds execution (Spring Boot: 20 and 15 seconds), and 64 KiB combined stdout/stderr **per phase**. Standard input is sent once and closed. One active submission runs per instance; overlapping requests receive 429.
 
+## Spring Boot projects
+
+`POST /api/project/run` runs a multi-file Spring Boot project as a web server and sends it HTTP requests. Each call starts a fresh app with a fresh in-memory H2 database, so a client that wants data to persist replays its earlier writes.
+
+```json
+{
+  "files": [{ "path": "src/main/java/com/example/demo/DemoApplication.java", "content": "..." }],
+  "mainClass": "com.example.demo.DemoApplication",
+  "requests": [{ "method": "POST", "path": "/api/tasks", "headers": { "Content-Type": "application/json" }, "body": "{\"title\":\"x\"}" }]
+}
+```
+
+- Paths: `src/main/java/**/*.java`, plus `src/main/resources/application.properties`, `data.sql` and `schema.sql`. Up to 60 files and 256 KiB in total. `mainClass` must be in a package and match a file.
+- Requests: up to 30, sent in order. Methods GET, POST, PUT, PATCH and DELETE, and paths on the app only. Bodies up to 64 KiB. Each response body is cut at 32 KiB.
+- Libraries: everything in [spring-boot/project/pom.xml](spring-boot/project/pom.xml) (web, validation, Spring Data JPA and H2), resolved into `/opt/spring-boot/project-lib`. Single-file Spring runs keep the smaller [spring-boot/pom.xml](spring-boot/pom.xml) set. For local runs, resolve the project set the same way as the README shows above and set `SPRING_BOOT_PROJECT_LIB` to that folder.
+- One deadline (100 seconds) covers the whole run. Readiness is checked by connecting to the port, so the app's own routes are never called before its requests.
+- The runner sets the port, the H2 datasource and the servlet web server on the command line, so `application.properties` cannot change them.
+- Limits: 30 seconds to compile, 45 seconds for the app to start listening, 10 seconds per request and 25 seconds for all requests.
+- Result: `status` is `success`, `compile_error`, `startup_error`, `runtime_error` (the app exited while handling requests), `timeout`, `output_limit` or `cancelled`. `phase` is `compile`, `startup` or `requests`.
+- Fields: `compile`, `startup` (`ready`, `ms`), `app` (the Spring log) and `responses` (`status`, `headers`, `body`, `truncated`, `ms`, and `error` when there was no answer).
+
+Deploy it as its own service with `.\scripts\deploy.ps1 -Spring -ConfirmedPaidAccountWithBudget`. This creates `webnest-spring-playground` with 2 vCPU, 2 GiB, concurrency 1, at most 2 instances and a 120-second timeout, so long project runs never hold up single-file Java runs. Check it with `npm run test:cloud:project`, using `PLAYGROUND_URL` set to that service.
+
 ## Webnest Studio integration
 
 ```text

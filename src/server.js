@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { configuration } from './config.js';
 import { JavaRunner, InputError, validateSubmission } from './runner.js';
+import { runProject, validateProject } from './project.js';
 
 const publicFiles = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -12,7 +13,8 @@ const publicFiles = new Map([
 ]);
 function log(entry) { console.log(JSON.stringify({ time: new Date().toISOString(), ...entry })); }
 
-export function createServer(config, runner) {
+// `projectRunner` runs a Spring Boot project; tests pass a fake.
+export function createServer(config, runner, projectRunner = runProject) {
   let active = false;
   const server = http.createServer(async (req, res) => {
     const requestId = randomUUID();
@@ -41,10 +43,11 @@ export function createServer(config, runner) {
       } catch { send(500, { error: 'Unable to load editor' }); }
       return;
     }
-    if (url.pathname !== '/api/run') return send(404, { error: 'Not found' });
+    const project = url.pathname === '/api/project/run';
+    if (url.pathname !== '/api/run' && !project) return send(404, { error: 'Not found' });
     if (req.method !== 'POST') {
       res.setHeader('Allow', 'POST');
-      return send(405, { error: 'Use POST /api/run' });
+      return send(405, { error: `Use POST ${url.pathname}` });
     }
     // Disallow cross-origin browser execution, including requests targeting the local JDK.
     const origin = req.headers.origin;
@@ -73,8 +76,9 @@ export function createServer(config, runner) {
       const chunks = [];
       for await (const chunk of req) {
         size += chunk.length;
-        if (size > config.bodyLimitBytes) {
-          send(413, { error: 'Request exceeds 128 KiB' });
+        const limit = project ? config.projectBodyLimitBytes : config.bodyLimitBytes;
+        if (size > limit) {
+          send(413, { error: `Request exceeds ${limit / 1024} KiB` });
           return;
         }
         chunks.push(chunk);
@@ -83,13 +87,15 @@ export function createServer(config, runner) {
       let body;
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { throw new InputError('Request body is not valid JSON'); }
-      const submission = validateSubmission(body, config);
-      const result = await runner.run(submission, controller.signal);
+      const result = project
+        ? await projectRunner(runner, validateProject(body, config), controller.signal)
+        : await runner.run(validateSubmission(body, config), controller.signal);
       send(200, { ...result, javaVersion: 17, durationMs: Math.round(performance.now() - started) });
       // Never put source, stdin, stdout, or student exception text in shared server logs.
       log({ severity: result.status === 'success' ? 'INFO' : 'WARNING', event: 'execution',
         requestId, status: result.status, phase: result.phase, durationMs: Math.round(performance.now() - started),
-        compileExitCode: result.compile.exitCode, runExitCode: result.run?.exitCode ?? null });
+        compileExitCode: result.compile.exitCode, runExitCode: result.run?.exitCode ?? result.app?.exitCode ?? null,
+        ...(project ? { kind: 'project', requests: result.responses?.length ?? 0 } : {}) });
     } catch (error) {
       if (error instanceof InputError) send(400, { error: error.message });
       else {

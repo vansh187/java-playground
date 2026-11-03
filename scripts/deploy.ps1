@@ -3,8 +3,11 @@ param(
     [string]$Region = 'us-central1',
     [string]$Service = 'webnest-java-playground',
     [string]$WebnestServiceAccount = '',
+    # Deploys the same image as the Spring Boot project service: larger, so long project runs never block Java runs.
+    [switch]$Spring,
     [switch]$ConfirmedPaidAccountWithBudget
 )
+if ($Spring -and $Service -eq 'webnest-java-playground') { $Service = 'webnest-spring-playground' }
 $ErrorActionPreference = 'Stop'
 if (-not $ConfirmedPaidAccountWithBudget) {
     throw 'Deployment uses a paid billing account. Free-tier allowances and budget alerts do not guarantee a zero bill. Confirm a budget alert exists under Billing > Budgets & alerts, then pass -ConfirmedPaidAccountWithBudget.'
@@ -61,9 +64,17 @@ try {
     Invoke-Gcloud artifacts repositories add-iam-policy-binding $repository --project=$ProjectId --location=$Region --member=$buildMember --role=roles/artifactregistry.writer --format=none
     Invoke-Gcloud projects add-iam-policy-binding $ProjectId --member=$buildMember --role=roles/logging.logWriter --condition=None --format=none
     $tag = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $image = "${Region}-docker.pkg.dev/$ProjectId/$repository/java-playground:$tag"
+    # Spring gets its own image name: the cleanup policy keeps the newest two per name, so its
+    # deploys never delete the image the Java service runs on.
+    $imageName = if ($Spring) { 'spring-playground' } else { 'java-playground' }
+    $image = "${Region}-docker.pkg.dev/$ProjectId/$repository/${imageName}:$tag"
     Invoke-Gcloud builds submit . --project=$ProjectId --region=$Region --tag=$image --timeout=1200
-    Invoke-Gcloud beta run deploy $Service --project=$ProjectId --region=$Region --image=$image --sandbox-launcher --execution-environment=gen2 --service-account=$runtimeAccount --no-allow-unauthenticated --concurrency=1 --cpu=1 --memory=1Gi --min-instances=0 --max-instances=1 --timeout=60 --port=8080 --set-env-vars=EXECUTION_MODE=cloud-run --cpu-throttling
+    $sizing = if ($Spring) {
+        @('--cpu=2', '--memory=2Gi', '--max-instances=2', '--timeout=120', '--set-env-vars=EXECUTION_MODE=cloud-run,PROJECT_CPUS=2,PROJECT_HEAP_MB=512')
+    } else {
+        @('--cpu=1', '--memory=1Gi', '--max-instances=1', '--timeout=60', '--set-env-vars=EXECUTION_MODE=cloud-run')
+    }
+    Invoke-Gcloud beta run deploy $Service --project=$ProjectId --region=$Region --image=$image --sandbox-launcher --execution-environment=gen2 --service-account=$runtimeAccount --no-allow-unauthenticated --concurrency=1 @sizing --min-instances=0 --port=8080 --cpu-throttling
     if ($WebnestServiceAccount) {
         Invoke-Gcloud run services add-iam-policy-binding $Service --project=$ProjectId --region=$Region --member="serviceAccount:$WebnestServiceAccount" --role=roles/run.invoker
     }

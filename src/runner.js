@@ -51,6 +51,7 @@ export class JavaRunner {
     if (c.mode === 'cloud-run') {
       await access(c.sandbox); // Fail closed: never fall back to ordinary child execution.
       await access(c.springBootLib); // The image must ship the Spring Boot jars.
+      await access(c.springBootProjectLib);
       // Exercise actual sandbox creation before the service is marked ready.
       const result = await this.runProcess(c.sandbox, ['do', '--', '/bin/true'], { timeoutMs: 10000 });
       if (result.exitCode !== 0) throw new Error(`Cloud Run sandbox startup failed: ${result.stderr}`);
