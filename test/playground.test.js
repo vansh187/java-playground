@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { configuration } from '../src/config.js';
 import { JavaRunner, validateSubmission } from '../src/runner.js';
 import { createServer } from '../src/server.js';
+import { execute } from '../src/process.js';
 
 const config = configuration({ ...process.env, EXECUTION_MODE: 'local', PORT: '0' });
 const runner = new JavaRunner(config);
@@ -174,6 +175,18 @@ test('overlapping requests get backpressure, not a second execution', async () =
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
 
+test('a timed-out stage returns even if another process keeps its output pipe open', async () => {
+  // Mirrors Cloud Run: killing `sandbox exec` leaves the program inside the sandbox holding stdout.
+  const holder = `const c = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'],
+    { detached: true, stdio: ['ignore', 'inherit', 'inherit'] }); console.error('PID:' + c.pid); c.unref(); setInterval(() => {}, 1000);`;
+  const started = Date.now();
+  const result = await execute(process.execPath, ['-e', holder], { timeoutMs: 1000 });
+  const grandchild = Number(/PID:(\d+)/.exec(result.stderr)?.[1]);
+  try {
+    assert.equal(result.timedOut, true);
+    assert.ok(Date.now() - started < 6000, `took ${Date.now() - started} ms`);
+  } finally { if (grandchild) try { process.kill(grandchild, 'SIGKILL'); } catch {} }
+});
 test('cloud runner compiles and runs inside one sandbox then deletes it', async () => {
   const calls = [];
   const fake = async (command, args, options = {}) => {
