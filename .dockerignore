@@ -7,3 +7,5 @@
 !public/**
 !spring-boot/
 !spring-boot/pom.xml
+!node-libs/
+node-libs/node_modules/

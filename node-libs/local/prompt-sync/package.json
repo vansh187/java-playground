@@ -1,0 +1,7 @@
+{
+  "name": "prompt-sync",
+  "version": "4.2.0-webnest.1",
+  "description": "WebNest stand-in for prompt-sync: reads typed input from stdin instead of a terminal, which the playground does not have",
+  "main": "index.js",
+  "license": "MIT"
+}

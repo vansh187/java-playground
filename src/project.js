@@ -70,10 +70,15 @@ export function validateProject(body, config) {
   if (!seen.has(`src/main/java/${mainClass.replaceAll('.', '/')}.java`)) {
     throw new InputError(`mainClass ${mainClass} must match a file, src/main/java/${mainClass.replaceAll('.', '/')}.java`);
   }
+  return { files: clean, mainClass, requests: validateProjectRequests(requests, config) };
+}
+
+// The requests to send to a started app; shared with Node.js projects (src/node.js).
+export function validateProjectRequests(requests, config) {
   if (!Array.isArray(requests) || requests.length > config.projectRequestLimit) {
     throw new InputError(`requests must be a list of at most ${config.projectRequestLimit} requests`);
   }
-  return { files: clean, mainClass, requests: requests.map((request, index) => validateRequest(request, index, config)) };
+  return requests.map((request, index) => validateRequest(request, index, config));
 }
 
 const stageStatus = (stage, failure) => {
@@ -84,7 +89,7 @@ const stageStatus = (stage, failure) => {
 };
 
 // The probe's report: one JSON line per event. A line cut off when it was stopped is skipped.
-function parseProbe(stage) {
+export function parseProbe(stage) {
   const report = { ready: false, readyMs: null, responses: [], done: false, timedOut: false, error: null };
   for (const line of stage.stdout.split('\n')) {
     let event;

@@ -32,5 +32,11 @@ export function configuration(env = process.env) {
     projectTotalTimeoutMs: 100000, projectSandboxLifetimeMs: 110000,
     projectHeapMb: Number(env.PROJECT_HEAP_MB || 384), projectCpus: Number(env.PROJECT_CPUS || 2),
     bodyLimitBytes: 131072, codeLimitBytes: 65536, stdinLimitBytes: 16384,
+    // Node.js (src/node.js): scripts (POST /api/node/run) and Express apps (POST /api/node/project/run).
+    // The preinstalled packages: a folder with package.json and node_modules, built into the image.
+    nodeLibs: env.NODE_LIBS || '/opt/node-libs',
+    nodeFileLimit: 40, nodeCodeLimitBytes: 262144, nodeHeapMb: 256,
+    nodeRunTimeoutMs: 10000, nodeReadyTimeoutMs: 15000, nodeAppTimeoutMs: 45000,
+    nodeTotalTimeoutMs: 60000, nodeSandboxLifetimeMs: 70000,
   };
 }

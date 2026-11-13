@@ -5,6 +5,10 @@ import { pathToFileURL } from 'node:url';
 import { configuration } from './config.js';
 import { JavaRunner, InputError, validateSubmission } from './runner.js';
 import { runProject, validateProject } from './project.js';
+import { nodePackages, runNodeProject, runNodeScript, validateNodeProject, validateNodeScript } from './node.js';
+
+// Each POST route: its body limit, how it is checked, and how it runs. Tests pass fakes.
+const defaultRunners = { project: runProject, nodeScript: runNodeScript, nodeProject: runNodeProject };
 
 const publicFiles = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -14,7 +18,18 @@ const publicFiles = new Map([
 function log(entry) { console.log(JSON.stringify({ time: new Date().toISOString(), ...entry })); }
 
 // `projectRunner` runs a Spring Boot project; tests pass a fake.
-export function createServer(config, runner, projectRunner = runProject) {
+export function createServer(config, runner, projectRunner = runProject, nodeRunners = {}) {
+  const run = { ...defaultRunners, project: projectRunner, ...nodeRunners };
+  const routes = new Map([
+    ['/api/run', { limit: config.bodyLimitBytes, kind: 'java',
+      start: (body, signal) => runner.run(validateSubmission(body, config), signal) }],
+    ['/api/project/run', { limit: config.projectBodyLimitBytes, kind: 'project',
+      start: (body, signal) => run.project(runner, validateProject(body, config), signal) }],
+    ['/api/node/run', { limit: config.projectBodyLimitBytes, kind: 'node',
+      start: (body, signal) => run.nodeScript(runner, validateNodeScript(body, config), signal) }],
+    ['/api/node/project/run', { limit: config.projectBodyLimitBytes, kind: 'node-project',
+      start: (body, signal) => run.nodeProject(runner, validateNodeProject(body, config), signal) }],
+  ]);
   let active = false;
   const server = http.createServer(async (req, res) => {
     const requestId = randomUUID();
@@ -43,8 +58,12 @@ export function createServer(config, runner, projectRunner = runProject) {
       } catch { send(500, { error: 'Unable to load editor' }); }
       return;
     }
-    const project = url.pathname === '/api/project/run';
-    if (url.pathname !== '/api/run' && !project) return send(404, { error: 'Not found' });
+    if (req.method === 'GET' && url.pathname === '/api/node/packages') {
+      const packages = await nodePackages(config);
+      return send(200, { nodeVersion: process.version, packages: Object.entries(packages).map(([name, version]) => ({ name, version })) });
+    }
+    const route = routes.get(url.pathname);
+    if (!route) return send(404, { error: 'Not found' });
     if (req.method !== 'POST') {
       res.setHeader('Allow', 'POST');
       return send(405, { error: `Use POST ${url.pathname}` });
@@ -76,7 +95,7 @@ export function createServer(config, runner, projectRunner = runProject) {
       const chunks = [];
       for await (const chunk of req) {
         size += chunk.length;
-        const limit = project ? config.projectBodyLimitBytes : config.bodyLimitBytes;
+        const { limit } = route;
         if (size > limit) {
           send(413, { error: `Request exceeds ${limit / 1024} KiB` });
           return;
@@ -87,15 +106,18 @@ export function createServer(config, runner, projectRunner = runProject) {
       let body;
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { throw new InputError('Request body is not valid JSON'); }
-      const result = project
-        ? await projectRunner(runner, validateProject(body, config), controller.signal)
-        : await runner.run(validateSubmission(body, config), controller.signal);
-      send(200, { ...result, javaVersion: 17, durationMs: Math.round(performance.now() - started) });
-      // Never put source, stdin, stdout, or student exception text in shared server logs.
+      const result = await route.start(body, controller.signal);
+      const node = route.kind.startsWith('node');
+      send(200, { ...result, ...(node ? {} : { javaVersion: 17 }), durationMs: Math.round(performance.now() - started) });
+      // Never put source, stdin, stdout, or student exception text in shared server logs. Missing
+      // package names are logged so the preinstalled list can grow from what learners ask for.
       log({ severity: result.status === 'success' ? 'INFO' : 'WARNING', event: 'execution',
         requestId, status: result.status, phase: result.phase, durationMs: Math.round(performance.now() - started),
-        compileExitCode: result.compile.exitCode, runExitCode: result.run?.exitCode ?? result.app?.exitCode ?? null,
-        ...(project ? { kind: 'project', requests: result.responses?.length ?? 0 } : {}) });
+        compileExitCode: result.compile?.exitCode ?? null, runExitCode: result.run?.exitCode ?? result.app?.exitCode ?? null,
+        ...(route.kind === 'java' ? {} : { kind: route.kind }),
+        ...(result.responses ? { requests: result.responses.length } : {}),
+        ...(Array.isArray(result.missing) && result.missing.length
+          ? { missingPackages: result.missing.slice(0, 10).map((name) => String(name).slice(0, 80)) } : {}) });
     } catch (error) {
       if (error instanceof InputError) send(400, { error: error.message });
       else {

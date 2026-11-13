@@ -124,6 +124,23 @@ Limits: 64 KiB source, 16 KiB stdin, 128 KiB total request, 16 arguments of at m
 
 Deploy it as its own service with `.\scripts\deploy.ps1 -Spring -ConfirmedPaidAccountWithBudget`. This creates `webnest-spring-playground` with 2 vCPU, 2 GiB, concurrency 1, at most 2 instances and a 120-second timeout, so long project runs never hold up single-file Java runs. Check it with `npm run test:cloud:project`, using `PLAYGROUND_URL` set to that service.
 
+## Node.js
+
+The same image runs learners' Node.js code (Node 24, the runner's own Node) in the same sandbox, with no network. Nothing is installed per run: the packages in [node-libs/package.json](node-libs/package.json) are installed at image build with `--ignore-scripts` into `/opt/node-libs`, and linked into each project as `node_modules`.
+
+- `POST /api/node/run` runs a script once: `{ "files": [{ "path": "main.js", "content": "..." }], "entry": "main.js", "stdin": "..." }`. The result has `status` (`success`, `runtime_error`, `timeout`, `output_limit`, `cancelled` or `package_error`), `phase` and `run` (`stdout`, `stderr`, `exitCode`, ...), like `/api/run`.
+- `POST /api/node/project/run` starts an Express (or any Node HTTP) app and sends it requests, like the Spring Boot project route: `{ "files": [...], "entry": "server.js", "requests": [...] }`. The app gets `PORT`, and `src/nodeListen.cjs` makes its first server listen on that port whatever the code asks for, so `app.listen(3000)` works. The result has `startup`, `app` and `responses`, with the same statuses as Spring Boot projects (no compile stage).
+- `GET /api/node/packages` lists the preinstalled packages and their versions.
+- Files: relative paths ending in .js, .mjs, .cjs, .json, .html, .css, .txt, .md, .csv or .sql, plus `.env`; never inside `node_modules`. Up to 40 files and 256 KiB.
+- Node's permission model is on as well: a program can read and write files only in its project (and read the packages). It cannot start child processes or workers, or load native addons.
+- Limits: 256 MB heap, 10 seconds for a script, 15 seconds for an app to start listening and 60 seconds for a whole project run, plus the request limits of Spring Boot projects.
+- A package that is not installed: if `package.json` lists it, the run stops with `package_error` and `missing`. If the code only requires it, the run fails as usual and `missing` names it. Missing names are written to the logs (`missingPackages`), so the list can grow from what learners ask for.
+- `prompt-sync` is a local stand-in ([node-libs/local/prompt-sync](node-libs/local/prompt-sync)) that reads stdin, because a run has no terminal.
+- Input arrives all at once, so `src/nodeStdin.cjs` (preloaded into scripts) keeps lines that come in before a program asks for them: two `await rl.question()` calls in a row both get their line, as in a terminal.
+- Learners' files are written to `<project>/app` and the packages are linked in beside it as `<project>/node_modules`; only `app/` is writable, so a program cannot change the shared packages.
+
+To add a package: `cd node-libs && npm install --ignore-scripts --save-exact <name>`. Use pure JavaScript packages only. For local runs and tests, run `npm run node-libs` once (or set `NODE_LIBS` to a folder holding them). Check a deployed service with `npm run test:cloud:node`.
+
 ## Webnest Studio integration
 
 ```text
